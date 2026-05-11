@@ -41,7 +41,7 @@ jobs:
           pnpm run build
           cd ..
 
-      # 🎯 关键修复：首先生成图标文件，确保后续步骤能找到它
+      # 生成图标文件
       - name: 生成图标文件
         shell: python
         run: |
@@ -49,6 +49,7 @@ jobs:
           img = Image.new('RGB', (64, 64), color='blue')
           img.save('tray_icon.ico', format='ICO')
 
+      # 创建启动器（修正图标加载路径）
       - name: 创建启动器脚本
         shell: python
         run: |
@@ -67,12 +68,17 @@ jobs:
                 uvicorn.run(app, host='127.0.0.1', port=18080)
 
             def setup_tray():
+                # 根据是否打包确定图标文件路径
+                if getattr(sys, 'frozen', False):
+                    icon_path = os.path.join(sys._MEIPASS, 'tray_icon.ico')
+                else:
+                    icon_path = 'tray_icon.ico'
                 def open_ui():
                     webbrowser.open('http://127.0.0.1:18080')
                 def quit_app(icon):
                     icon.stop()
                     os._exit(0)
-                icon = Icon('lens', Image.open('tray_icon.ico'), menu=Menu(
+                icon = Icon('lens', Image.open(icon_path), menu=Menu(
                     MenuItem('打开管理后台', open_ui),
                     MenuItem('退出', quit_app)
                 ))
@@ -86,6 +92,7 @@ jobs:
           with open('launcher.py', 'w', encoding='utf-8') as f:
               f.write(code)
 
+      # 创建 spec（datas 中增加图标文件）
       - name: 创建 PyInstaller spec 文件
         shell: python
         run: |
@@ -97,7 +104,7 @@ jobs:
                 ['launcher.py'],
                 pathex=[],
                 binaries=[],
-                datas=[('ui/out', 'ui/out')],
+                datas=[('ui/out', 'ui/out'), ('tray_icon.ico', '.')],
                 hiddenimports=[],
                 hookspath=[],
                 runtime_hooks=[],
