@@ -20,7 +20,7 @@ jobs:
         with:
           version: 9
 
-      - name: 安装 Python 依赖 & 打包工具（包含异步驱动）
+      - name: 安装 Python 依赖 & 打包工具
         run: |
           pip install .
           pip install pyinstaller pystray pillow aiosqlite
@@ -50,13 +50,13 @@ jobs:
           $base64 = "AAABAAEAEBAAAAAAIACIAQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAARnQU1BAACxjwv8YQUAAAABc1JHQgCuzhzpAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAEGSURBVDiNY2TAAgSn3mplZGSsQhb795+h40O2aiU29ShAaNrt/0LTbv8nVhxDEYwtMOVWNEyTwNQ73tjU4NSMbhs2Pk4DUCQn3mJnqN/PAeUxYlPDxMDAwCAw9ebSf///Z2P4mZXxh5C4zHeoBoTB//4nC069tRFuABMjU9SHbLVpWP2GBbzLUZvHyMjoBzfg/////zin35Qm1gCenhsiKF54n63GzPmf6Qmyol/f/opiYzMwMDCwcTG/fpelyohiKrZQRg59grGATREyxqWZCc2MMHypTWja7f9//zEmIosx4lOMzMfwMw4XkAxwGvCfgeEFnP3//weSDWBgYNiOMIxxOy5FADcTlvnsmxJnAAAAAElFTkSuQmCC"
           [IO.File]::WriteAllBytes("tray_icon.ico", [Convert]::FromBase64String($base64))
 
-      - name: 创建启动器脚本（自动迁移数据库）
+      - name: 创建启动器脚本（修复迁移）
         shell: python
         run: |
           import textwrap
 
           code = textwrap.dedent("""\
-            import os, sys, threading, webbrowser, traceback, subprocess
+            import os, sys, threading, webbrowser, traceback
             import uvicorn
             from pystray import Icon, MenuItem, Menu
             from PIL import Image
@@ -65,23 +65,25 @@ jobs:
             os.environ.setdefault('LENS_UI_STATIC_EXPORT', '1')
 
             def run_migrations():
-                # 自动执行数据库迁移，确保所有表被创建
-                try:
-                    from alembic.config import Config
-                    from alembic import command
-                    if getattr(sys, 'frozen', False):
-                        base_dir = sys._MEIPASS
-                    else:
-                        base_dir = os.getcwd()
-                    alembic_ini = os.path.join(base_dir, 'alembic.ini')
-                    # 如果项目使用其他路径的 alembic 配置，可在此调整
-                    if os.path.exists(alembic_ini):
-                        alembic_cfg = Config(alembic_ini)
-                        command.upgrade(alembic_cfg, "head")
-                except Exception:
-                    with open('migration_error.log', 'w') as f:
-                        traceback.print_exc(file=f)
-                    raise
+                """执行数据库迁移，直接抛出异常以便控制台查看"""
+                from alembic.config import Config
+                from alembic import command
+                if getattr(sys, 'frozen', False):
+                    base_dir = sys._MEIPASS
+                else:
+                    base_dir = os.getcwd()
+                alembic_ini = os.path.join(base_dir, 'alembic.ini')
+                if not os.path.exists(alembic_ini):
+                    raise FileNotFoundError(f"找不到 alembic.ini: {alembic_ini}")
+                cfg = Config(alembic_ini)
+                # 强制使用正确的数据库连接（与环境变量一致）
+                cfg.set_main_option("sqlalchemy.url", os.environ["LENS_DATABASE_URL"])
+                # 将迁移版本目录也指向正确的位置
+                versions_dir = os.path.join(base_dir, 'alembic')
+                if os.path.isdir(versions_dir):
+                    cfg.set_main_option("script_location", versions_dir)
+                command.upgrade(cfg, "head")
+                print("数据库迁移完成。")
 
             def start_server():
                 try:
@@ -92,15 +94,18 @@ jobs:
                     static_dir = os.path.join(base_dir, 'ui', 'out')
                     os.environ['LENS_UI_STATIC_DIR'] = static_dir
 
-                    # 启动前先迁移数据库
+                    # 启动前先迁移数据库（错误会直接抛出到控制台）
                     run_migrations()
 
                     from lens_api.gateway.service import app
                     uvicorn.run(app, host='127.0.0.1', port=18080)
                 except Exception:
+                    print("服务器启动失败：")
+                    traceback.print_exc()
                     with open('startup_error.log', 'w') as f:
                         traceback.print_exc(file=f)
-                    raise
+                    input("按回车键退出...")
+                    os._exit(1)
 
             def setup_tray():
                 if getattr(sys, 'frozen', False):
@@ -126,7 +131,7 @@ jobs:
           with open('launcher.py', 'w', encoding='utf-8') as f:
               f.write(code)
 
-      - name: 创建 PyInstaller spec 文件
+      - name: 创建 PyInstaller spec 文件（包含 alembic）
         shell: python
         run: |
           import textwrap
@@ -137,7 +142,12 @@ jobs:
                 ['launcher.py'],
                 pathex=[],
                 binaries=[],
-                datas=[('ui/out', 'ui/out'), ('tray_icon.ico', '.')],
+                datas=[
+                    ('ui/out', 'ui/out'),
+                    ('tray_icon.ico', '.'),
+                    ('alembic.ini', '.'),
+                    ('alembic', 'alembic'),
+                ],
                 hiddenimports=['aiosqlite'],
                 hookspath=[],
                 runtime_hooks=[],
