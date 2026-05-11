@@ -40,7 +40,7 @@ jobs:
           }
 
           cd ui
-          pnpm install
+          pnpm install --no-workspaces
           $env:LENS_UI_STATIC_EXPORT=1
           pnpm run build
           cd ..
