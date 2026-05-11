@@ -22,7 +22,6 @@ jobs:
           pip install .
           pip install pyinstaller pystray pillow
 
-      # 构建前端（彻底避免 monorepo 干扰）
       - name: 构建前端
         shell: pwsh
         run: |
@@ -31,20 +30,17 @@ jobs:
             $pkg = Get-Content package.json -Raw | ConvertFrom-Json
             if ($pkg.workspaces -or $pkg.packages) { Remove-Item package.json -Force }
           }
-
           cd ui
           if (Test-Path pnpm-workspace.yaml) { Remove-Item pnpm-workspace.yaml -Force }
           if (Test-Path package.json) {
             $pkgUi = Get-Content package.json -Raw | ConvertFrom-Json
             if ($pkgUi.workspaces -or $pkgUi.packages) { Remove-Item package.json -Force }
           }
-
           pnpm install
           $env:LENS_UI_STATIC_EXPORT=1
           pnpm run build
           cd ..
 
-      # 用 Python 脚本正确生成 launcher.py（缩进绝不混乱）
       - name: 创建启动器脚本
         shell: python
         run: |
@@ -85,7 +81,6 @@ jobs:
           with open('launcher.py', 'w') as f:
               f.write(code)
 
-      # 用 Python 脚本正确生成 lens.spec
       - name: 创建 PyInstaller spec 文件
         shell: python
         run: |
@@ -135,6 +130,10 @@ jobs:
 
           with open('lens.spec', 'w') as f:
               f.write(spec)
+
+      # 👇 临时调试步骤：显示生成的文件内容（找到后请删除此步）
+      - name: 调试 - 显示 launcher.py 内容
+        run: type launcher.py
 
       - name: 使用 PyInstaller 打包
         run: pyinstaller lens.spec
