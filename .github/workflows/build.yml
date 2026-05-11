@@ -1,11 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:  # 只允许手动触发
+  # push:
+  #   branches: [main]
+  #   tags: ["v*"]
+  # pull_request:
+  #   branches: [main]
 
 jobs:
   backend:
