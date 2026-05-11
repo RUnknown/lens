@@ -44,26 +44,44 @@ jobs:
           pnpm run build
           cd ..
 
-      - name: 生成托盘图标（使用自定义 Base64 图标）
+      - name: 生成托盘图标
         shell: pwsh
         run: |
-          # 提取纯 Base64 字符串（去掉 data URI 前缀）
           $base64 = "AAABAAEAEBAAAAAAIACIAQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAARnQU1BAACxjwv8YQUAAAABc1JHQgCuzhzpAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAEGSURBVDiNY2TAAgSn3mplZGSsQhb795+h40O2aiU29ShAaNrt/0LTbv8nVhxDEYwtMOVWNEyTwNQ73tjU4NSMbhs2Pk4DUCQn3mJnqN/PAeUxYlPDxMDAwCAw9ebSf///Z2P4mZXxh5C4zHeoBoTB//4nC069tRFuABMjU9SHbLVpWP2GBbzLUZvHyMjoBzfg/////zin35Qm1gCenhsiKF54n63GzPmf6Qmyol/f/opiYzMwMDCwcTG/fpelyohiKrZQRg59grGATREyxqWZCc2MMHypTWja7f9//zEmIosx4lOMzMfwMw4XkAxwGvCfgeEFnP3//weSDWBgYNiOMIxxOy5FADcTlvnsmxJnAAAAAElFTkSuQmCC"
           [IO.File]::WriteAllBytes("tray_icon.ico", [Convert]::FromBase64String($base64))
 
-      - name: 创建启动器脚本（设置异步 SQLite 连接）
+      - name: 创建启动器脚本（自动迁移数据库）
         shell: python
         run: |
           import textwrap
 
           code = textwrap.dedent("""\
-            import os, sys, threading, webbrowser, traceback
+            import os, sys, threading, webbrowser, traceback, subprocess
             import uvicorn
             from pystray import Icon, MenuItem, Menu
             from PIL import Image
 
             os.environ.setdefault('LENS_DATABASE_URL', 'sqlite+aiosqlite:///./lens.db')
             os.environ.setdefault('LENS_UI_STATIC_EXPORT', '1')
+
+            def run_migrations():
+                # 自动执行数据库迁移，确保所有表被创建
+                try:
+                    from alembic.config import Config
+                    from alembic import command
+                    if getattr(sys, 'frozen', False):
+                        base_dir = sys._MEIPASS
+                    else:
+                        base_dir = os.getcwd()
+                    alembic_ini = os.path.join(base_dir, 'alembic.ini')
+                    # 如果项目使用其他路径的 alembic 配置，可在此调整
+                    if os.path.exists(alembic_ini):
+                        alembic_cfg = Config(alembic_ini)
+                        command.upgrade(alembic_cfg, "head")
+                except Exception:
+                    with open('migration_error.log', 'w') as f:
+                        traceback.print_exc(file=f)
+                    raise
 
             def start_server():
                 try:
@@ -73,6 +91,9 @@ jobs:
                         base_dir = os.getcwd()
                     static_dir = os.path.join(base_dir, 'ui', 'out')
                     os.environ['LENS_UI_STATIC_DIR'] = static_dir
+
+                    # 启动前先迁移数据库
+                    run_migrations()
 
                     from lens_api.gateway.service import app
                     uvicorn.run(app, host='127.0.0.1', port=18080)
