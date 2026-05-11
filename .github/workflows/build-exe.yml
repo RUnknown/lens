@@ -1,6 +1,5 @@
 name: 打包 Windows 桌面程序 (Lens)
 
-# 手动触发，你也可以改成 push tags 等方式
 on: workflow_dispatch
 
 jobs:
@@ -10,12 +9,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1. 设置 Python 环境
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 2. 设置 pnpm 环境
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -25,41 +22,29 @@ jobs:
           pip install .
           pip install pyinstaller pystray pillow
 
-      # 3. 构建前端为静态文件（彻底避免 monorepo 干扰）
+      # 3. 构建前端（彻底避免 monorepo 干扰）
       - name: 构建前端
         shell: pwsh
         run: |
-          # 1. 先在根目录清理（防止向上查找时被误判）
           if (Test-Path pnpm-workspace.yaml) { Remove-Item pnpm-workspace.yaml -Force }
           if (Test-Path package.json) {
             $pkg = Get-Content package.json -Raw | ConvertFrom-Json
-            if ($pkg.workspaces -or $pkg.packages) {
-              Remove-Item package.json -Force
-            }
+            if ($pkg.workspaces -or $pkg.packages) { Remove-Item package.json -Force }
           }
 
-          # 2. 进入 ui 子目录
           cd ui
-
-          # 3. 在 ui 目录内也同样清理一遍（防止它自身就是一个 monorepo 根）
           if (Test-Path pnpm-workspace.yaml) { Remove-Item pnpm-workspace.yaml -Force }
           if (Test-Path package.json) {
             $pkgUi = Get-Content package.json -Raw | ConvertFrom-Json
-            if ($pkgUi.workspaces -or $pkgUi.packages) {
-              Remove-Item package.json -Force
-            }
+            if ($pkgUi.workspaces -or $pkgUi.packages) { Remove-Item package.json -Force }
           }
 
-          # 4. 正常安装依赖（不再需要额外参数）
           pnpm install
-          
-          # 5. 构建静态文件
           $env:LENS_UI_STATIC_EXPORT=1
           pnpm run build
-          
           cd ..
 
-      # 4. 动态生成启动器脚本（通过缩进 + 去空格技巧）
+      # 4. 动态生成启动器脚本（修正缩进：用 4 空格基准）
       - name: 创建启动器脚本
         shell: pwsh
         run: |
@@ -69,7 +54,6 @@ jobs:
           from pystray import Icon, MenuItem, Menu
           from PIL import Image
 
-          # 生成一个简单的托盘图标
           img = Image.new('RGB', (64, 64), color='blue')
           img.save('tray_icon.ico', format='ICO')
 
@@ -96,9 +80,10 @@ jobs:
               threading.Thread(target=start_server, daemon=True).start()
               setup_tray()
           '@
-          $code -replace '(?m)^ {8}', '' | Out-File -FilePath launcher.py -Encoding utf8
+          # 移除每行开头的 4 个空格，得到正确的 Python 代码
+          $code -replace '(?m)^ {4}', '' | Out-File -FilePath launcher.py -Encoding utf8
 
-      # 5. 动态生成 PyInstaller 配置
+      # 5. 动态生成 PyInstaller spec 文件（同样修正缩进）
       - name: 创建 PyInstaller spec 文件
         shell: pwsh
         run: |
@@ -143,12 +128,11 @@ jobs:
               name='Lens'
           )
           '@
-          $spec -replace '(?m)^ {8}', '' | Out-File -FilePath lens.spec -Encoding utf8
+          $spec -replace '(?m)^ {4}', '' | Out-File -FilePath lens.spec -Encoding utf8
 
       - name: 使用 PyInstaller 打包
         run: pyinstaller lens.spec
 
-      # 6. 上传打包结果
       - name: 上传打包结果
         uses: actions/upload-artifact@v4
         with:
