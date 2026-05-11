@@ -25,24 +25,38 @@ jobs:
           pip install .
           pip install pyinstaller pystray pillow
 
-      # 3. 构建前端为静态文件
+      # 3. 构建前端为静态文件（彻底避免 monorepo 干扰）
       - name: 构建前端
         shell: pwsh
         run: |
-          # 临时禁用/删除可能存在的 monorepo 配置文件，让 pnpm 把 ui 当作独立项目
-          if (Test-Path pnpm-workspace.yaml) { Rename-Item pnpm-workspace.yaml pnpm-workspace.yaml.bak }
-          # 如果根 package.json 里定义了 workspaces 字段，也临时删除
+          # 1. 先在根目录清理（防止向上查找时被误判）
+          if (Test-Path pnpm-workspace.yaml) { Remove-Item pnpm-workspace.yaml -Force }
           if (Test-Path package.json) {
             $pkg = Get-Content package.json -Raw | ConvertFrom-Json
             if ($pkg.workspaces -or $pkg.packages) {
-              Rename-Item package.json package.json.bak
+              Remove-Item package.json -Force
             }
           }
 
+          # 2. 进入 ui 子目录
           cd ui
-          pnpm install --no-workspaces
+
+          # 3. 在 ui 目录内也同样清理一遍（防止它自身就是一个 monorepo 根）
+          if (Test-Path pnpm-workspace.yaml) { Remove-Item pnpm-workspace.yaml -Force }
+          if (Test-Path package.json) {
+            $pkgUi = Get-Content package.json -Raw | ConvertFrom-Json
+            if ($pkgUi.workspaces -or $pkgUi.packages) {
+              Remove-Item package.json -Force
+            }
+          }
+
+          # 4. 正常安装依赖（不再需要额外参数）
+          pnpm install
+          
+          # 5. 构建静态文件
           $env:LENS_UI_STATIC_EXPORT=1
           pnpm run build
+          
           cd ..
 
       # 4. 动态生成启动器脚本（通过缩进 + 去空格技巧）
