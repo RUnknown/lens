@@ -41,7 +41,6 @@ jobs:
           pnpm run build
           cd ..
 
-      # 生成图标文件
       - name: 生成图标文件
         shell: python
         run: |
@@ -49,26 +48,41 @@ jobs:
           img = Image.new('RGB', (64, 64), color='blue')
           img.save('tray_icon.ico', format='ICO')
 
-      # 创建启动器（修正图标加载路径）
       - name: 创建启动器脚本
         shell: python
         run: |
           import textwrap
 
           code = textwrap.dedent("""\
-            import os, sys, threading, webbrowser
+            import os, sys, threading, webbrowser, traceback
             import uvicorn
             from pystray import Icon, MenuItem, Menu
             from PIL import Image
 
+            # 设置基础环境变量
+            os.environ.setdefault('LENS_DATABASE_URL', 'sqlite:///./lens.db')
+            os.environ.setdefault('LENS_UI_STATIC_EXPORT', '1')  # 强制使用静态文件
+
             def start_server():
-                static_dir = os.path.join(sys._MEIPASS, 'ui/out') if getattr(sys, 'frozen', False) else 'ui/out'
-                os.environ['LENS_UI_STATIC_DIR'] = static_dir
-                from lens_api.gateway.service import app
-                uvicorn.run(app, host='127.0.0.1', port=18080)
+                try:
+                    # 根据是否打包设置静态文件路径
+                    if getattr(sys, 'frozen', False):
+                        base_dir = sys._MEIPASS
+                    else:
+                        base_dir = os.getcwd()
+                    static_dir = os.path.join(base_dir, 'ui', 'out')
+                    os.environ['LENS_UI_STATIC_DIR'] = static_dir
+
+                    from lens_api.gateway.service import app
+                    uvicorn.run(app, host='127.0.0.1', port=18080)
+                except Exception:
+                    # 启动失败时将错误写入文件，方便查看
+                    with open('startup_error.log', 'w') as f:
+                        traceback.print_exc(file=f)
+                    # 重新抛出，让控制台能看到（如果开启）
+                    raise
 
             def setup_tray():
-                # 根据是否打包确定图标文件路径
                 if getattr(sys, 'frozen', False):
                     icon_path = os.path.join(sys._MEIPASS, 'tray_icon.ico')
                 else:
@@ -92,7 +106,6 @@ jobs:
           with open('launcher.py', 'w', encoding='utf-8') as f:
               f.write(code)
 
-      # 创建 spec（datas 中增加图标文件）
       - name: 创建 PyInstaller spec 文件
         shell: python
         run: |
@@ -125,7 +138,7 @@ jobs:
                 bootloader_ignore_signals=False,
                 strip=False,
                 upx=True,
-                console=False,
+                console=True,   # 临时开启控制台，便于诊断
                 icon='tray_icon.ico'
             )
             coll = COLLECT(
