@@ -41,6 +41,14 @@ jobs:
           pnpm run build
           cd ..
 
+      # 🎯 关键修复：首先生成图标文件，确保后续步骤能找到它
+      - name: 生成图标文件
+        shell: python
+        run: |
+          from PIL import Image
+          img = Image.new('RGB', (64, 64), color='blue')
+          img.save('tray_icon.ico', format='ICO')
+
       - name: 创建启动器脚本
         shell: python
         run: |
@@ -51,9 +59,6 @@ jobs:
             import uvicorn
             from pystray import Icon, MenuItem, Menu
             from PIL import Image
-
-            img = Image.new('RGB', (64, 64), color='blue')
-            img.save('tray_icon.ico', format='ICO')
 
             def start_server():
                 static_dir = os.path.join(sys._MEIPASS, 'ui/out') if getattr(sys, 'frozen', False) else 'ui/out'
@@ -80,9 +85,6 @@ jobs:
 
           with open('launcher.py', 'w', encoding='utf-8') as f:
               f.write(code)
-
-      - name: 调试 - 显示 launcher.py 内容
-        run: type launcher.py
 
       - name: 创建 PyInstaller spec 文件
         shell: python
