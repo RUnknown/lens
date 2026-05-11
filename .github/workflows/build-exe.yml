@@ -1,6 +1,7 @@
 name: 打包 Windows 桌面程序 (Lens)
 
-于: workflow_dispatch  # 手动触发，你也可以改为 push tags 等方式
+# 手动触发，你也可以改成 push tags 等方式
+on: workflow_dispatch
 
 jobs:
   build:
@@ -21,111 +22,108 @@ jobs:
 
       - name: 安装 Python 依赖 & 打包工具
         run: |
-          # 安装项目及所有依赖 (通过 pyproject.toml)
           pip install .
-          # 安装打包所需工具
           pip install pyinstaller pystray pillow
 
-      # 3. 构建前端为静态文件 (无需修改 next.config.ts)
+      # 3. 构建前端为静态文件
       - name: 构建前端
         run: |
           cd ui
           pnpm install
-          # 设置环境变量启用静态导出模式
           $env:LENS_UI_STATIC_EXPORT=1
-          pnpm run build  # 静态文件将生成到 ui/out 目录
+          pnpm run build
           cd ..
 
-      # 4. 动态生成启动器脚本 launcher.py (临时文件)
+      # 4. 动态生成启动器脚本（通过缩进 + 去空格技巧）
       - name: 创建启动器脚本
+        shell: pwsh
         run: |
-          @"
-      import os, sys, threading, webbrowser
-      import uvicorn
-      from pystray import Icon, MenuItem, Menu
-      from PIL import Image
+          $code = @'
+          import os, sys, threading, webbrowser
+          import uvicorn
+          from pystray import Icon, MenuItem, Menu
+          from PIL import Image
 
-      # 生成一个简单的托盘图标 (蓝色方块)
-      img = Image.new('RGB', (64, 64), color='blue')
-      img.save('tray_icon.ico', format='ICO')
+          # 生成一个简单的托盘图标
+          img = Image.new('RGB', (64, 64), color='blue')
+          img.save('tray_icon.ico', format='ICO')
 
-      def start_server():
-          # 设置前端静态文件目录
-          static_dir = os.path.join(sys._MEIPASS, 'ui/out') if getattr(sys, 'frozen', False) else 'ui/out'
-          os.environ['LENS_UI_STATIC_DIR'] = static_dir
-          # 从正确的路径导入 FastAPI 应用
-          from lens_api.gateway.service import app
-          uvicorn.run(app, host='127.0.0.1', port=18080)
+          def start_server():
+              static_dir = os.path.join(sys._MEIPASS, 'ui/out') if getattr(sys, 'frozen', False) else 'ui/out'
+              os.environ['LENS_UI_STATIC_DIR'] = static_dir
+              from lens_api.gateway.service import app
+              uvicorn.run(app, host='127.0.0.1', port=18080)
 
-      def setup_tray():
-          def open_ui():
-              webbrowser.open('http://127.0.0.1:18080')
-          def quit_app(icon):
-              icon.stop()
-              os._exit(0)
+          def setup_tray():
+              def open_ui():
+                  webbrowser.open('http://127.0.0.1:18080')
+              def quit_app(icon):
+                  icon.stop()
+                  os._exit(0)
 
-          icon = Icon('lens', Image.open('tray_icon.ico'), menu=Menu(
-              MenuItem('打开管理后台', open_ui),
-              MenuItem('退出', quit_app)
-          ))
-          icon.run()
+              icon = Icon('lens', Image.open('tray_icon.ico'), menu=Menu(
+                  MenuItem('打开管理后台', open_ui),
+                  MenuItem('退出', quit_app)
+              ))
+              icon.run()
 
-      if __name__ == '__main__':
-          threading.Thread(target=start_server, daemon=True).start()
-          setup_tray()
-      "@ > launcher.py
+          if __name__ == '__main__':
+              threading.Thread(target=start_server, daemon=True).start()
+              setup_tray()
+          '@
+          $code -replace '(?m)^ {8}', '' | Out-File -FilePath launcher.py -Encoding utf8
 
-      # 5. 动态生成 PyInstaller 打包配置 lens.spec
+      # 5. 动态生成 PyInstaller 配置
       - name: 创建 PyInstaller spec 文件
+        shell: pwsh
         run: |
-          @"
-      # -*- mode: python ; coding: utf-8 -*-
-      a = Analysis(
-          ['launcher.py'],
-          pathex=[],
-          binaries=[],
-          datas=[('ui/out', 'ui/out')],  # 将前端静态文件打包进程序
-          hiddenimports=[],
-          hookspath=[],
-          runtime_hooks=[],
-          # 排除未用到的大型库，减小体积、降低内存占用
-          excludes=['matplotlib', 'numpy', 'pandas', 'scipy'],
-          win_no_prefer_redirects=False,
-          win_private_assemblies=False,
-          cipher=None,
-          noarchive=False,
-      )
-      pyz = PYZ(a.pure, a.zipped_data, cipher=None)
-
-      exe = EXE(
-          pyz,
-          a.scripts,
-          [],
-          exclude_binaries=True,
-          name='Lens',
-          debug=False,
-          bootloader_ignore_signals=False,
-          strip=False,
-          upx=True,
-          console=False,   # 隐藏命令行窗口，实现后台运行
-          icon='tray_icon.ico'
-      )
-      coll = COLLECT(
-          exe,
-          a.binaries,
-          a.zipfiles,
-          a.datas,
-          strip=False,
-          upx=True,
-          upx_exclude=[],
-          name='Lens'
-      )
-      "@ > lens.spec
+          $spec = @'
+          # -*- mode: python ; coding: utf-8 -*-
+          a = Analysis(
+              ['launcher.py'],
+              pathex=[],
+              binaries=[],
+              datas=[('ui/out', 'ui/out')],
+              hiddenimports=[],
+              hookspath=[],
+              runtime_hooks=[],
+              excludes=['matplotlib', 'numpy', 'pandas', 'scipy'],
+              win_no_prefer_redirects=False,
+              win_private_assemblies=False,
+              cipher=None,
+              noarchive=False,
+          )
+          pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+          exe = EXE(
+              pyz,
+              a.scripts,
+              [],
+              exclude_binaries=True,
+              name='Lens',
+              debug=False,
+              bootloader_ignore_signals=False,
+              strip=False,
+              upx=True,
+              console=False,
+              icon='tray_icon.ico'
+          )
+          coll = COLLECT(
+              exe,
+              a.binaries,
+              a.zipfiles,
+              a.datas,
+              strip=False,
+              upx=True,
+              upx_exclude=[],
+              name='Lens'
+          )
+          '@
+          $spec -replace '(?m)^ {8}', '' | Out-File -FilePath lens.spec -Encoding utf8
 
       - name: 使用 PyInstaller 打包
         run: pyinstaller lens.spec
 
-      # 6. 上传最终在本地分发的程序
+      # 6. 上传打包结果
       - name: 上传打包结果
         uses: actions/upload-artifact@v4
         with:
