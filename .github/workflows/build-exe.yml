@@ -27,7 +27,18 @@ jobs:
 
       # 3. 构建前端为静态文件
       - name: 构建前端
+        shell: pwsh
         run: |
+          # 临时禁用/删除可能存在的 monorepo 配置文件，让 pnpm 把 ui 当作独立项目
+          if (Test-Path pnpm-workspace.yaml) { Rename-Item pnpm-workspace.yaml pnpm-workspace.yaml.bak }
+          # 如果根 package.json 里定义了 workspaces 字段，也临时删除
+          if (Test-Path package.json) {
+            $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+            if ($pkg.workspaces -or $pkg.packages) {
+              Rename-Item package.json package.json.bak
+            }
+          }
+
           cd ui
           pnpm install
           $env:LENS_UI_STATIC_EXPORT=1
