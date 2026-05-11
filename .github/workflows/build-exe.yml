@@ -139,12 +139,11 @@ jobs:
           with open('launcher.py', 'w', encoding='utf-8') as f:
               f.write(code)
 
-      - name: 创建 PyInstaller spec 文件 (包含 migrations)
+      - name: 创建 PyInstaller spec 文件 (包含 migrations, 修复 import os)
         shell: python
         run: |
-          import textwrap
+          import os, textwrap   # ← 这里添加了 import os
 
-          # 动态检测资源避免打包错误，但手动确保关键的 alembic.ini 和 migrations 被打包
           datas = [('ui/out', 'ui/out'), ('tray_icon.ico', '.')]
           for filename in ['alembic.ini']:
               if os.path.exists(filename):
