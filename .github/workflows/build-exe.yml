@@ -33,16 +33,31 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: 'ui/pnpm-lock.yaml'
 
-      - name: 并行安装后端依赖 & 构建前端
+      - name: "并行: 安装后端依赖 & 构建前端"
         shell: bash
         run: |
           # 后台任务 1: 安装 Python 依赖
           pip install . pyinstaller pystray pillow aiosqlite &
           PID_PYTHON=$!
 
-          # 后台任务 2: 构建前端 (直接进入 ui 目录，无视根目录的 monorepo 配置)
+          # 后台任务 2: 构建前端
           (
+            # 清理根目录可能导致 pnpm 报错的 workspace 配置
+            if [ -f pnpm-workspace.yaml ]; then rm -f pnpm-workspace.yaml; fi
+            if [ -f package.json ]; then
+              if node -e "const p=require('./package.json'); if(p.workspaces||p.packages) process.exit(0); process.exit(1)"; then
+                rm -f package.json
+              fi
+            fi
+            
             cd ui
+            if [ -f pnpm-workspace.yaml ]; then rm -f pnpm-workspace.yaml; fi
+            if [ -f package.json ]; then
+              if node -e "const p=require('./package.json'); if(p.workspaces||p.packages) process.exit(0); process.exit(1)"; then
+                rm -f package.json
+              fi
+            fi
+
             pnpm install --frozen-lockfile
             LENS_UI_STATIC_EXPORT=1 pnpm run build
           ) &
