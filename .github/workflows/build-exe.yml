@@ -33,7 +33,7 @@ jobs:
           cache: 'pnpm'
           cache-dependency-path: 'ui/pnpm-lock.yaml'
 
-      - name: 并行: 安装后端依赖 & 构建前端
+      - name: 并行安装后端依赖 & 构建前端
         shell: bash
         run: |
           # 后台任务 1: 安装 Python 依赖
