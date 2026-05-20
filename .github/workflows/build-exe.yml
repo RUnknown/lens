@@ -267,7 +267,7 @@ jobs:
           import textwrap
 
           # 收集需要打包的数据文件
-          datas = []
+          atas = [('ui/out', 'ui/out')]
 
           # 前端静态文件
           if os.path.isdir("ui/out"):
@@ -484,7 +484,7 @@ jobs:
       - name: 使用 PyInstaller 打包
         shell: bash
         run: |
-          pyinstaller lens.spec
+          pyinstaller --clean lens.spec
 
           # 验证打包产物
           if [ ! -f "dist/Lens/Lens.exe" ]; then
