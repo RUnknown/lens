@@ -267,7 +267,7 @@ jobs:
           import textwrap
 
           # 收集需要打包的数据文件
-          atas = [('ui/out', 'ui/out')]
+          datas = []
 
           # 前端静态文件
           if os.path.isdir("ui/out"):
