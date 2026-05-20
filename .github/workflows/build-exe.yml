@@ -153,7 +153,7 @@ jobs:
         run: |
           import textwrap
 
-          code = textwrap.dedent(r"""
+          code = textwrap.dedent("""\
           import os
           import sys
           import threading
