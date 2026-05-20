@@ -3,6 +3,7 @@ name: 打包 Windows 桌面程序
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
@@ -16,226 +17,528 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      # ──────────────────────────────────────────────
+      # 1. 检出代码
+      # ──────────────────────────────────────────────
+      - uses: actions/checkout@v5
 
+      # ──────────────────────────────────────────────
+      # 2. 安装 Python 3.11
+      # ──────────────────────────────────────────────
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: "pip"
 
+      # ──────────────────────────────────────────────
+      # 3. 安装 pnpm 10（与项目 packageManager 一致）
+      # ──────────────────────────────────────────────
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.17.1
 
-      - uses: actions/setup-node@v4
+      # ──────────────────────────────────────────────
+      # 4. 安装 Node.js 22（与 Dockerfile 一致）
+      # ──────────────────────────────────────────────
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
-          cache: 'pnpm'
-          cache-dependency-path: 'ui/pnpm-lock.yaml'
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: "ui/pnpm-lock.yaml"
 
-      - name: "并行: 安装后端依赖 & 构建前端"
+      # ──────────────────────────────────────────────
+      # 5. 将 logo.svg 转换为 .ico / .png 图标
+      #    - lens.ico  → EXE 启动器图标 + 任务栏图标
+      #    - lens.png  → 系统托盘图标（pystray 使用）
+      # ──────────────────────────────────────────────
+      - name: 生成应用图标（SVG → ICO / PNG）
+        shell: pwsh
+        run: |
+          pip install Pillow cairosvg
+
+          $svgPath = "ui/public/logo.svg"
+          if (-not (Test-Path $svgPath)) {
+            Write-Error "logo.svg not found at $svgPath"
+            exit 1
+          }
+
+          # SVG → PNG（256×256，用于 ICO 内嵌及托盘图标）
+          python -c @"
+          import cairosvg
+          cairosvg.svg2png(url=r'ui/public/logo.svg', write_to='lens_256.png', output_width=256, output_height=256)
+          "@
+
+          # PNG → ICO（包含 16/32/48/64/128/256 多尺寸，兼容高 DPI）
+          python -c @"
+          from PIL import Image
+          img = Image.open('lens_256.png')
+          sizes = [(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)]
+          icons = []
+          for s in sizes:
+              icons.append(img.resize(s, Image.LANCZOS))
+          icons[0].save(
+              'lens.ico',
+              format='ICO',
+              sizes=[(i.width, i.height) for i in icons],
+              append_images=icons[1:],
+          )
+          print('lens.ico created with sizes:', [(i.width, i.height) for i in icons])
+          "@
+
+          # 托盘图标使用 32×32 PNG（pystray 最佳尺寸）
+          python -c @"
+          from PIL import Image
+          img = Image.open('lens_256.png')
+          tray = img.resize((32, 32), Image.LANCZOS)
+          tray.save('lens_tray.png', format='PNG')
+          print('lens_tray.png created (32x32)')
+          "@
+
+          Write-Host "Icons generated: lens.ico, lens_tray.png"
+
+      # ──────────────────────────────────────────────
+      # 6. 并行安装后端依赖 & 构建前端
+      # ──────────────────────────────────────────────
+      - name: 并行安装后端依赖 & 构建前端
         shell: bash
         run: |
-          # 后台任务 1: 安装 Python 依赖
+          set -e
+
+          # ── 后台任务 1：安装 Python 依赖 ──
           pip install . pyinstaller pystray pillow aiosqlite &
           PID_PYTHON=$!
 
-          # 后台任务 2: 构建前端
+          # ── 后台任务 2：构建前端静态文件 ──
           (
-            # 清理根目录可能导致 pnpm 报错的 workspace 配置
-            if [ -f pnpm-workspace.yaml ]; then rm -f pnpm-workspace.yaml; fi
-            if [ -f package.json ]; then
-              if node -e "const p=require('./package.json'); if(p.workspaces||p.packages) process.exit(0); process.exit(1)"; then
-                rm -f package.json
-              fi
-            fi
-            
             cd ui
-            if [ -f pnpm-workspace.yaml ]; then rm -f pnpm-workspace.yaml; fi
-            if [ -f package.json ]; then
-              if node -e "const p=require('./package.json'); if(p.workspaces||p.packages) process.exit(0); process.exit(1)"; then
-                rm -f package.json
-              fi
-            fi
-
             pnpm install --frozen-lockfile
             LENS_UI_STATIC_EXPORT=1 pnpm run build
           ) &
           PID_UI=$!
 
-          # 等待两个后台任务完成
-          wait $PID_PYTHON
-          wait $PID_UI
+          # 等待两个后台任务，任一失败则整体失败
+          wait $PID_PYTHON || exit 1
+          wait $PID_UI     || exit 1
 
-      - name: 生成托盘图标
-        shell: pwsh
+          echo "Both backend deps and frontend build completed successfully."
+
+      # ──────────────────────────────────────────────
+      # 7. 验证前端构建产物
+      # ──────────────────────────────────────────────
+      - name: 验证前端构建产物
+        shell: bash
         run: |
-          $base64 = "AAABAAEAEBAAAAAAIACIAQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAARnQU1BAACxjwv8YQUAAAABc1JHQgCuzhzpAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAEGSURBVDiNY2TAAgSn3mplZGSsQhb795+h40O2aiU29ShAaNrt/0LTbv8nVhxDEYwtMOVWNEyTwNQ73tjU4NSMbhs2Pk4DUCQn3mJnqN/PAeUxYlPDxMDAwCAw9ebSf///Z2P4mZXxh5C4zHeoBoTB//4nC069tRFuABMjU9SHbLVpWP2GBbzLUZvHyMjoBzfg/////zin35Qm1gCenhsiKF54n63GzPmf6Qmyol/f/opiYzMwMDCwcTG/fpelyohiKrZQRg59grGATREyxqWZCc2MMHypTWja7f9//zEmIosx4lOMzMfwMw4XkAxwGvCfgeEFnP3//weSDWBgYNiOMIxxOy5FADcTlvnsmxJnAAAAAElFTkSuQmCC"
-          [IO.File]::WriteAllBytes("tray_icon.ico", [Convert]::FromBase64String($base64))
+          if [ ! -d "ui/out" ]; then
+            echo "::error::Frontend build output 'ui/out' not found!"
+            exit 1
+          fi
+          echo "Frontend output files:"
+          ls -la ui/out/ | head -20
 
-      - name: 创建启动器脚本 (包含数据库初始化)
+      # ──────────────────────────────────────────────
+      # 8. 创建启动器脚本
+      #    - 数据库迁移 + 种子管理员
+      #    - 启动 uvicorn 服务
+      #    - 系统托盘图标 + 菜单
+      # ──────────────────────────────────────────────
+      - name: 创建启动器脚本
         shell: python
         run: |
           import textwrap
 
-          code = textwrap.dedent("""\
-            import os, sys, threading, webbrowser, traceback
-            import uvicorn
-            from pystray import Icon, MenuItem, Menu
-            from PIL import Image
-            from alembic.config import Config
-            from alembic import command
+          code = textwrap.dedent(r"""
+          import os
+          import sys
+          import threading
+          import webbrowser
+          import traceback
+          import argparse
 
-            os.environ.setdefault('LENS_DATABASE_URL', 'sqlite+aiosqlite:///./lens.db')
-            os.environ.setdefault('LENS_UI_STATIC_EXPORT', '1')
+          # ── 环境变量默认值 ──
+          # 数据库路径：与项目默认配置一致（./data/data.db）
+          os.environ.setdefault("LENS_DATABASE_URL", "sqlite+aiosqlite:///./data/data.db")
+          os.environ.setdefault("LENS_HOST", "127.0.0.1")
+          os.environ.setdefault("LENS_PORT", "18080")
 
-            def init_database():
-                try:
-                    base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.getcwd()
-                    alembic_ini = os.path.join(base_dir, 'alembic.ini')
-                    migrations_dir = os.path.join(base_dir, 'migrations')
+          # ── PyInstaller 打包后，资源目录为 sys._MEIPASS ──
+          BASE_DIR = sys._MEIPASS if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 
-                    if not os.path.exists(alembic_ini):
-                        print("alembic.ini not found, skipping migration.")
-                        return
-                    if not os.path.isdir(migrations_dir):
-                        print("migrations directory not found, skipping migration.")
-                        return
+          # 设置 LENS_PROJECT_DIR，让 cli.py 能找到 alembic.ini 和 migrations
+          os.environ["LENS_PROJECT_DIR"] = BASE_DIR
 
-                    cfg = Config(alembic_ini)
-                    cfg.set_main_option("script_location", migrations_dir)
-                    cfg.set_main_option("sqlalchemy.url", os.environ["LENS_DATABASE_URL"])
+          # 设置前端静态文件目录
+          static_dir = os.path.join(BASE_DIR, "ui", "out")
+          os.environ["LENS_UI_STATIC_DIR"] = static_dir
 
-                    print("Running database migrations...")
-                    command.upgrade(cfg, "head")
-                    print("Database migration completed.")
-                except Exception as e:
-                    print(f"Migration failed: {e}")
-                    traceback.print_exc()
 
-                try:
-                    from lens_api.cli import seed_admin
-                    import argparse
-                    ns = argparse.Namespace(username="admin", password="admin")
-                    seed_admin(ns)
-                    print("Admin user seeded (admin/admin).")
-                except Exception:
-                    print("Admin user already exists or seeding not available.")
+          def ensure_data_dir():
+              """确保 data 目录存在（SQLite 数据库存放位置）"""
+              db_url = os.environ.get("LENS_DATABASE_URL", "")
+              if "sqlite" in db_url and "./" in db_url:
+                  # 从相对路径提取 data 目录
+                  data_dir = os.path.join(os.getcwd(), "data")
+                  os.makedirs(data_dir, exist_ok=True)
 
-            def start_server():
-                try:
-                    base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.getcwd()
-                    static_dir = os.path.join(base_dir, 'ui', 'out')
-                    os.environ['LENS_UI_STATIC_DIR'] = static_dir
 
-                    init_database()
+          def init_database():
+              """运行数据库迁移 + 种子管理员"""
+              try:
+                  from alembic.config import Config
+                  from alembic import command
 
-                    from lens_api.gateway.service import app
-                    uvicorn.run(app, host='127.0.0.1', port=18080)
-                except Exception:
-                    print("Server startup failed:")
-                    traceback.print_exc()
-                    with open('startup_error.log', 'w') as f:
-                        traceback.print_exc(file=f)
-                    input("Press Enter to exit...")
-                    os._exit(1)
+                  alembic_ini = os.path.join(BASE_DIR, "alembic.ini")
+                  migrations_dir = os.path.join(BASE_DIR, "migrations")
 
-            def setup_tray():
-                icon_path = os.path.join(sys._MEIPASS, 'tray_icon.ico') if getattr(sys, 'frozen', False) else 'tray_icon.ico'
-                def open_ui():
-                    webbrowser.open('http://127.0.0.1:18080')
-                def quit_app(icon):
-                    icon.stop()
-                    os._exit(0)
-                icon = Icon('lens', Image.open(icon_path), menu=Menu(
-                    MenuItem('Open Admin', open_ui),
-                    MenuItem('Exit', quit_app)
-                ))
-                icon.run()
+                  if not os.path.exists(alembic_ini):
+                      print("[Lens] alembic.ini not found, skipping migration.")
+                      return
+                  if not os.path.isdir(migrations_dir):
+                      print("[Lens] migrations directory not found, skipping migration.")
+                      return
 
-            if __name__ == '__main__':
-                threading.Thread(target=start_server, daemon=True).start()
-                setup_tray()
-            """)
+                  cfg = Config(alembic_ini)
+                  cfg.set_main_option("script_location", migrations_dir)
 
-          with open('launcher.py', 'w', encoding='utf-8') as f:
+                  # 将 aiosqlite 替换为同步驱动供 alembic 使用
+                  db_url = os.environ.get("LENS_DATABASE_URL", "")
+                  cfg.set_main_option("sqlalchemy.url", db_url.replace("+aiosqlite", ""))
+
+                  print("[Lens] Running database migrations...")
+                  command.upgrade(cfg, "head")
+                  print("[Lens] Database migration completed.")
+              except Exception:
+                  print("[Lens] Migration failed:")
+                  traceback.print_exc()
+
+              try:
+                  from lens_api.cli import seed_admin
+                  ns = argparse.Namespace(username="admin", password="admin")
+                  seed_admin(ns)
+                  print("[Lens] Admin user seeded (admin/admin).")
+              except SystemExit:
+                  pass
+              except Exception:
+                  print("[Lens] Admin user already exists or seeding skipped.")
+
+
+          def start_server():
+              """启动 uvicorn 服务器"""
+              try:
+                  ensure_data_dir()
+                  init_database()
+
+                  import uvicorn
+                  from lens_api.gateway.service import app
+
+                  host = os.environ.get("LENS_HOST", "127.0.0.1")
+                  port = int(os.environ.get("LENS_PORT", "18080"))
+
+                  print(f"[Lens] Starting server at http://{host}:{port}")
+                  uvicorn.run(app, host=host, port=port)
+              except Exception:
+                  print("[Lens] Server startup failed:")
+                  traceback.print_exc()
+                  with open("startup_error.log", "w", encoding="utf-8") as f:
+                      traceback.print_exc(file=f)
+                  input("Press Enter to exit...")
+                  os._exit(1)
+
+
+          def setup_tray():
+              """设置系统托盘图标和菜单"""
+              from pystray import Icon, MenuItem, Menu
+              from PIL import Image
+
+              # 托盘图标使用 PNG 格式（兼容性最佳）
+              icon_path = os.path.join(BASE_DIR, "lens_tray.png")
+              if not os.path.exists(icon_path):
+                  # 回退到 ICO
+                  icon_path = os.path.join(BASE_DIR, "lens.ico")
+
+              icon_image = Image.open(icon_path)
+
+              host = os.environ.get("LENS_HOST", "127.0.0.1")
+              port = os.environ.get("LENS_PORT", "18080")
+              url = f"http://{host}:{port}"
+
+              def open_ui(_icon, _item):
+                  webbrowser.open(url)
+
+              def quit_app(icon, _item):
+                  icon.stop()
+                  os._exit(0)
+
+              icon = Icon(
+                  "Lens",
+                  icon_image,
+                  "Lens - LLM Gateway",
+                  Menu(
+                      MenuItem("Open Admin", open_ui, default=True),
+                      MenuItem("Exit", quit_app),
+                  ),
+              )
+              icon.run()
+
+
+          if __name__ == "__main__":
+              # 启动服务器线程
+              server_thread = threading.Thread(target=start_server, daemon=True)
+              server_thread.start()
+
+              # 主线程运行托盘图标（阻塞）
+              setup_tray()
+          """)
+
+          with open("launcher.py", "w", encoding="utf-8") as f:
               f.write(code)
 
+          print("launcher.py created successfully.")
+
+      # ──────────────────────────────────────────────
+      # 9. 创建 PyInstaller spec 文件
+      # ──────────────────────────────────────────────
       - name: 创建 PyInstaller spec
         shell: python
         run: |
-          import os, textwrap
+          import os
+          import textwrap
 
-          datas = [('ui/out', 'ui/out'), ('tray_icon.ico', '.')]
-          for filename in ['alembic.ini']:
-              if os.path.exists(filename):
-                  datas.append((filename, '.'))
-          if os.path.isdir('migrations'):
-              datas.append(('migrations', 'migrations'))
+          # 收集需要打包的数据文件
+          datas = []
+
+          # 前端静态文件
+          if os.path.isdir("ui/out"):
+              datas.append(("ui/out", "ui/out"))
+
+          # 图标文件
+          if os.path.exists("lens.ico"):
+              datas.append(("lens.ico", "."))
+          if os.path.exists("lens_tray.png"):
+              datas.append(("lens_tray.png", "."))
+
+          # 数据库迁移文件
+          if os.path.exists("alembic.ini"):
+              datas.append(("alembic.ini", "."))
+          if os.path.isdir("migrations"):
+              datas.append(("migrations", "migrations"))
+
+          # 读取版本号
+          version = "0.0.0"
+          init_path = os.path.join("lens_api", "__init__.py")
+          if os.path.exists(init_path):
+              with open(init_path, "r", encoding="utf-8") as f:
+                  for line in f:
+                      if line.startswith("__version__"):
+                          version = line.split("=")[1].strip().strip('"').strip("'")
+                          break
+
+          print(f"Packaging version: {version}")
+          print(f"Data files: {datas}")
 
           spec = textwrap.dedent(f"""\
-            # -*- mode: python ; coding: utf-8 -*-
-            a = Analysis(
-                ['launcher.py'],
-                pathex=[],
-                binaries=[],
-                datas={datas},
-                hiddenimports=[
-                    'aiosqlite',
-                    'uvicorn.logging',
-                    'uvicorn.loops',
-                    'uvicorn.loops.auto',
-                    'uvicorn.protocols',
-                    'uvicorn.protocols.http',
-                    'uvicorn.protocols.http.auto',
-                    'uvicorn.protocols.websockets',
-                    'uvicorn.protocols.websockets.auto',
-                    'uvicorn.lifespan',
-                    'uvicorn.lifespan.on',
-                ],
-                hookspath=[],
-                runtime_hooks=[],
-                excludes=['matplotlib', 'numpy', 'pandas', 'scipy'],
-                win_no_prefer_redirects=False,
-                win_private_assemblies=False,
-                cipher=None,
-                noarchive=False,
-            )
-            pyz = PYZ(a.pure, a.zipped_data, cipher=None)
-            exe = EXE(
-                pyz,
-                a.scripts,
-                [],
-                exclude_binaries=True,
-                name='Lens',
-                debug=False,
-                bootloader_ignore_signals=False,
-                strip=False,
-                upx=False,
-                console=True,
-                icon='tray_icon.ico'
-            )
-            coll = COLLECT(
-                exe,
-                a.binaries,
-                a.zipfiles,
-                a.datas,
-                strip=False,
-                upx=False,
-                upx_exclude=[],
-                name='Lens'
-            )
-            """)
+          # -*- mode: python ; coding: utf-8 -*-
+          import sys
 
-          with open('lens.spec', 'w', encoding='utf-8') as f:
+          block_cipher = None
+
+          a = Analysis(
+              ['launcher.py'],
+              pathex=[],
+              binaries=[],
+              datas={datas!r},
+              hiddenimports=[
+                  # ── lens_api 包及其子模块 ──
+                  'lens_api',
+                  'lens_api.__init__',
+                  'lens_api.cli',
+                  'lens_api.models',
+                  'lens_api.api',
+                  'lens_api.api.app',
+                  'lens_api.api.routes',
+                  'lens_api.api.routes.__init__',
+                  'lens_api.api.routes.admin_auth',
+                  'lens_api.api.routes.backups',
+                  'lens_api.api.routes.cronjobs',
+                  'lens_api.api.routes.gateway_api_keys',
+                  'lens_api.api.routes.model_groups',
+                  'lens_api.api.routes.model_prices',
+                  'lens_api.api.routes.overview',
+                  'lens_api.api.routes.proxy',
+                  'lens_api.api.routes.public',
+                  'lens_api.api.routes.request_logs',
+                  'lens_api.api.routes.routing',
+                  'lens_api.api.routes.settings',
+                  'lens_api.api.routes.sites',
+                  'lens_api.api.routes.ui_static',
+                  'lens_api.api.routes.version',
+                  'lens_api.core',
+                  'lens_api.core.auth',
+                  'lens_api.core.config',
+                  'lens_api.core.db',
+                  'lens_api.core.model_prices',
+                  'lens_api.core.time_zone',
+                  'lens_api.gateway',
+                  'lens_api.gateway.service',
+                  'lens_api.gateway.router',
+                  'lens_api.gateway.upstreams',
+                  'lens_api.gateway.cronjob_runner',
+                  'lens_api.gateway.converters',
+                  'lens_api.gateway.converters.__init__',
+                  'lens_api.gateway.converters._shared',
+                  'lens_api.gateway.converters.chat_to_anthropic',
+                  'lens_api.gateway.converters.chat_to_responses',
+                  'lens_api.persistence',
+                  'lens_api.persistence.__init__',
+                  'lens_api.persistence.admin_store',
+                  'lens_api.persistence.backup_store',
+                  'lens_api.persistence.channel_store',
+                  'lens_api.persistence.cronjob_store',
+                  'lens_api.persistence.domain_store',
+                  'lens_api.persistence.entities',
+                  # ── FastAPI / Starlette ──
+                  'fastapi',
+                  'fastapi.applications',
+                  'fastapi.routing',
+                  'fastapi.middleware',
+                  'fastapi.security',
+                  'fastapi.responses',
+                  'fastapi.staticfiles',
+                  'starlette',
+                  'starlette.routing',
+                  'starlette.middleware',
+                  'starlette.middleware.cors',
+                  'starlette.staticfiles',
+                  'starlette.responses',
+                  'starlette.background',
+                  # ── SQLAlchemy ──
+                  'sqlalchemy',
+                  'sqlalchemy.ext',
+                  'sqlalchemy.ext.asyncio',
+                  'sqlalchemy.orm',
+                  'sqlalchemy.pool',
+                  'sqlalchemy.event',
+                  'sqlalchemy.exc',
+                  'sqlalchemy.engine',
+                  # ── Pydantic ──
+                  'pydantic',
+                  'pydantic.deprecated',
+                  'pydantic.deprecated.decorator',
+                  'pydantic_settings',
+                  # ── Uvicorn ──
+                  'uvicorn',
+                  'uvicorn.logging',
+                  'uvicorn.loops',
+                  'uvicorn.loops.auto',
+                  'uvicorn.protocols',
+                  'uvicorn.protocols.http',
+                  'uvicorn.protocols.http.auto',
+                  'uvicorn.protocols.websockets',
+                  'uvicorn.protocols.websockets.auto',
+                  'uvicorn.lifespan',
+                  'uvicorn.lifespan.on',
+                  # ── Alembic ──
+                  'alembic',
+                  'alembic.config',
+                  'alembic.command',
+                  'alembic.migration',
+                  'alembic.operations',
+                  'alembic.runtime',
+                  'alembic.runtime.migration',
+                  'alembic.script',
+                  'alembic.script.revision',
+                  # ── 其他依赖 ──
+                  'httpx',
+                  'jwt',
+                  'packaging',
+                  'packaging.version',
+                  'multipart',
+                  'aiosqlite',
+                  'zoneinfo',
+                  'tzdata',
+                  'pystray',
+                  'PIL',
+                  # ── uvicorn[standard] 额外依赖 ──
+                  'httptools',
+                  'uvloop',
+                  'watchfiles',
+              ],
+              hookspath=[],
+              runtime_hooks=[],
+              excludes=[
+                  'matplotlib',
+                  'numpy',
+                  'pandas',
+                  'scipy',
+                  'tkinter',
+                  'unittest',
+                  'test',
+                  'tests',
+              ],
+              win_no_prefer_redirects=False,
+              win_private_assemblies=False,
+              cipher=block_cipher,
+              noarchive=False,
+          )
+
+          pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+          exe = EXE(
+              pyz,
+              a.scripts,
+              [],
+              exclude_binaries=True,
+              name='Lens',
+              debug=False,
+              bootloader_ignore_signals=False,
+              strip=False,
+              upx=False,
+              console=True,
+              # console=False,
+              icon='lens.ico',
+              version_file=None,
+          )
+
+          coll = COLLECT(
+              exe,
+              a.binaries,
+              a.zipfiles,
+              a.datas,
+              strip=False,
+              upx=False,
+              upx_exclude=[],
+              name='Lens',
+          )
+          """)
+
+          with open("lens.spec", "w", encoding="utf-8") as f:
               f.write(spec)
 
-      - name: 使用 PyInstaller 打包
-        run: pyinstaller lens.spec
+          print("lens.spec created successfully.")
 
+      # ──────────────────────────────────────────────
+      # 10. 使用 PyInstaller 打包
+      # ──────────────────────────────────────────────
+      - name: 使用 PyInstaller 打包
+        shell: bash
+        run: |
+          pyinstaller lens.spec
+
+          # 验证打包产物
+          if [ ! -f "dist/Lens/Lens.exe" ]; then
+            echo "::error::Lens.exe not found in dist/Lens/!"
+            exit 1
+          fi
+          echo "Lens.exe built successfully."
+          ls -la dist/Lens/ | head -20
+
+      # ──────────────────────────────────────────────
+      # 11. 上传打包结果
+      # ──────────────────────────────────────────────
       - name: 上传打包结果
         uses: actions/upload-artifact@v4
         with:
           name: Lens-Windows
           path: dist/Lens/
           retention-days: 7
+          if-no-files-found: error
+          compression-level: 6
