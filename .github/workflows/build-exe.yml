@@ -47,14 +47,13 @@ jobs:
           cache-dependency-path: "ui/pnpm-lock.yaml"
 
       # ──────────────────────────────────────────────
-      # 5. 将 logo.svg 转换为 .ico / .png 图标
-      #    - lens.ico  → EXE 启动器图标 + 任务栏图标
-      #    - lens.png  → 系统托盘图标（pystray 使用）
+      # 5. 生成应用图标（使用 sharp 转换 SVG → PNG，再用 Pillow 生成 ICO）
       # ──────────────────────────────────────────────
-      - name: 生成应用图标（SVG → ICO / PNG）
+      - name: 生成应用图标（sharp + Pillow）
         shell: pwsh
         run: |
-          pip install Pillow cairosvg
+          # 安装 Pillow（用于 ICO 生成），sharp 通过 pnpm 安装
+          pip install Pillow
 
           $svgPath = "ui/public/logo.svg"
           if (-not (Test-Path $svgPath)) {
@@ -62,13 +61,21 @@ jobs:
             exit 1
           }
 
-          # SVG → PNG（256×256，用于 ICO 内嵌及托盘图标）
-          python -c @"
-          import cairosvg
-          cairosvg.svg2png(url=r'ui/public/logo.svg', write_to='lens_256.png', output_width=256, output_height=256)
+          # 使用 sharp 将 SVG 转为 256x256 PNG
+          cd ui
+          pnpm add -D sharp
+          node -e @"
+          const sharp = require('sharp');
+          sharp('public/logo.svg')
+              .resize(256, 256)
+              .png()
+              .toFile('../lens_256.png')
+              .then(() => console.log('lens_256.png generated'))
+              .catch(err => { console.error(err); process.exit(1); });
           "@
+          cd ..
 
-          # PNG → ICO（包含 16/32/48/64/128/256 多尺寸，兼容高 DPI）
+          # PNG → ICO（多尺寸）
           python -c @"
           from PIL import Image
           img = Image.open('lens_256.png')
@@ -82,16 +89,16 @@ jobs:
               sizes=[(i.width, i.height) for i in icons],
               append_images=icons[1:],
           )
-          print('lens.ico created with sizes:', [(i.width, i.height) for i in icons])
+          print('lens.ico created')
           "@
 
-          # 托盘图标使用 32×32 PNG（pystray 最佳尺寸）
+          # 生成托盘图标 32×32 PNG
           python -c @"
           from PIL import Image
           img = Image.open('lens_256.png')
           tray = img.resize((32, 32), Image.LANCZOS)
           tray.save('lens_tray.png', format='PNG')
-          print('lens_tray.png created (32x32)')
+          print('lens_tray.png created')
           "@
 
           Write-Host "Icons generated: lens.ico, lens_tray.png"
