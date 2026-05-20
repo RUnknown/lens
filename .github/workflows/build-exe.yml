@@ -31,14 +31,14 @@ jobs:
           cache: "pip"
 
       # ──────────────────────────────────────────────
-      # 3. 安装 pnpm 10（与项目 packageManager 一致）
+      # 3. 安装 pnpm 10(与项目 packageManager 一致)
       # ──────────────────────────────────────────────
       - uses: pnpm/action-setup@v4
         with:
           version: 10.17.1
 
       # ──────────────────────────────────────────────
-      # 4. 安装 Node.js 22（与 Dockerfile 一致）
+      # 4. 安装 Node.js 22(与 Dockerfile 一致)
       # ──────────────────────────────────────────────
       - uses: actions/setup-node@v5
         with:
@@ -47,12 +47,12 @@ jobs:
           cache-dependency-path: "ui/pnpm-lock.yaml"
 
       # ──────────────────────────────────────────────
-      # 5. 生成应用图标（使用 sharp 转换 SVG → PNG，再用 Pillow 生成 ICO）
+      # 5. 生成应用图标(使用 sharp 转换 SVG → PNG，再用 Pillow 生成 ICO)
       # ──────────────────────────────────────────────
-      - name: 生成应用图标（sharp + Pillow）
+      - name: 生成应用图标(sharp + Pillow)
         shell: pwsh
         run: |
-          # 安装 Pillow（用于 ICO 生成），sharp 通过 pnpm 安装
+          # 安装 Pillow(用于 ICO 生成)，sharp 通过 pnpm 安装
           pip install Pillow
 
           $svgPath = "ui/public/logo.svg"
@@ -75,7 +75,7 @@ jobs:
           "@
           cd ..
 
-          # PNG → ICO（多尺寸）
+          # PNG → ICO(多尺寸)
           python -c @"
           from PIL import Image
           img = Image.open('lens_256.png')
@@ -162,7 +162,7 @@ jobs:
           import argparse
 
           # ── 环境变量默认值 ──
-          # 数据库路径：与项目默认配置一致（./data/data.db）
+          # 数据库路径：与项目默认配置一致(./data/data.db)
           os.environ.setdefault("LENS_DATABASE_URL", "sqlite+aiosqlite:///./data/data.db")
           os.environ.setdefault("LENS_HOST", "127.0.0.1")
           os.environ.setdefault("LENS_PORT", "18080")
@@ -179,7 +179,7 @@ jobs:
 
 
           def ensure_data_dir():
-              """确保 data 目录存在（SQLite 数据库存放位置）"""
+              """确保 data 目录存在(SQLite 数据库存放位置)"""
               db_url = os.environ.get("LENS_DATABASE_URL", "")
               if "sqlite" in db_url and "./" in db_url:
                   # 从相对路径提取 data 目录
@@ -256,7 +256,7 @@ jobs:
               from pystray import Icon, MenuItem, Menu
               from PIL import Image
 
-              # 托盘图标使用 PNG 格式（兼容性最佳）
+              # 托盘图标使用 PNG 格式(兼容性最佳)
               icon_path = os.path.join(BASE_DIR, "lens_tray.png")
               if not os.path.exists(icon_path):
                   # 回退到 ICO
@@ -292,7 +292,7 @@ jobs:
               server_thread = threading.Thread(target=start_server, daemon=True)
               server_thread.start()
 
-              # 主线程运行托盘图标（阻塞）
+              # 主线程运行托盘图标(阻塞)
               setup_tray()
           """)
 
